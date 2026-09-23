@@ -27,12 +27,11 @@ impl Runner {
         let mut header_map = HeaderMap::new();
 
         for h in &self.args.headers {
-            if let Some((key, val)) = h.split_once(':') {
-                if let Ok(name) = HeaderName::from_bytes(key.trim().as_bytes()) {
-                    if let Ok(value) = HeaderValue::from_str(val.trim()) {
-                        header_map.insert(name, value);
-                    }
-                }
+            if let Some((key, val)) = h.split_once(':')
+                && let Ok(name) = HeaderName::from_bytes(key.trim().as_bytes())
+                && let Ok(value) = HeaderValue::from_str(val.trim())
+            {
+                header_map.insert(name, value);
             }
         }
 
