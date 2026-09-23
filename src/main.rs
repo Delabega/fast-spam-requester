@@ -1,4 +1,5 @@
 mod cli;
+mod metrics;
 
 use clap::Parser;
 
