@@ -1,11 +1,15 @@
 mod cli;
 mod metrics;
+mod runner;
 
 use clap::Parser;
 
 use crate::cli::Cli;
+use crate::runner::Runner;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
-    println!("{}", cli.url)
+    let runner = Runner::new(cli);
+    runner.run().await;
 }
