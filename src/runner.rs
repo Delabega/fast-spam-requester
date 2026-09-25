@@ -1,14 +1,15 @@
+use crate::cli::Cli;
+use crate::metrics::Metrics;
 use bytes::Bytes;
 use reqwest::{
-    Client,
+    Client, Url,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
-
-use crate::cli::Cli;
-use crate::metrics::Metrics;
+use tokio::task::JoinSet;
 
 pub struct Runner {
     args: Cli,
@@ -37,6 +38,7 @@ impl Runner {
         }
 
         let payload: Option<Bytes> = self.args.body.as_ref().map(|b| Bytes::from(b.clone()));
+        let target_url: Url = self.args.url.parse().expect("invalid url");
         let client = Client::builder()
             .default_headers(header_map)
             .tcp_nodelay(true)
@@ -45,50 +47,45 @@ impl Runner {
             .timeout(Duration::from_secs(5))
             .build()
             .expect("Failed to build client");
-        let semaphore = Arc::new(Semaphore::new(self.args.concurrency));
 
         let start = Instant::now();
-        let target_url = self.args.url.clone();
+
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let mut join_set = JoinSet::new();
 
         println!("Running test on  {}", self.args.duration.as_secs());
 
-        tokio::select! {
-        _ = tokio::time::sleep(self.args.duration) => {
-            println!("Time`s up");
-        }
-        _ = async {
-            loop {
-                let permit = match Arc::clone(&semaphore).acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => break,
-                };
+        for _ in 0..self.args.concurrency {
+            let client = client.clone();
+            let metrics = Arc::clone(&self.metrics);
+            let payload = payload.clone();
+            let stop = Arc::clone(&stop_signal);
+            let url = target_url.clone();
 
-                let client = client.clone();
-                let url = target_url.clone();
-                let metrics = Arc::clone(&self.metrics);
-                let payload = payload.clone();
-
-                tokio::spawn(async move {
-                    let mut req = client.post(&url);
-                    if let Some(body) = payload {
-                        req = req.body(body);
+            join_set.spawn(async move {
+                while !stop.load(Ordering::Relaxed) {
+                    let mut req = client.post(url.clone());
+                    if let Some(ref body) = payload {
+                        req = req.body(body.clone());
                     }
 
                     match req.send().await {
                         Ok(resp) => {
                             metrics.record_response(resp.status().as_u16());
+                            let _ = resp.bytes().await;
                         }
                         Err(_) => {
-                             metrics.record_failure();
+                            metrics.record_failure();
                         }
                     }
+                }
+            });
+        }
 
-                    drop(permit);
-                });
-                    }
-                } => {}
-            }
-        let _ = semaphore.acquire_many(self.args.concurrency as u32).await;
+        tokio::time::sleep(self.args.duration).await;
+        stop_signal.store(true, Ordering::Relaxed);
+
+        while join_set.join_next().await.is_some() {}
 
         let total_time = start.elapsed().as_secs_f64();
         let stats = self.metrics.snapshot();
