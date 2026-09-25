@@ -11,3 +11,10 @@ humantime = "2.4.0"
 reqwest = "0.13.5"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
 bytes = "1.12.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
